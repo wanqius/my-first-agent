@@ -18,13 +18,27 @@ def count_chars(text):
     return len(text.replace(" ", ""))
 
 def ask(msgs):
-    r = requests.post(
-        "https://api.deepseek.com/chat/completions",
-        headers={"Authorization": "Bearer " + os.environ.get("DEEPSEEK_API_KEY", "")},
-        json={"model": "deepseek-chat", "messages": msgs, "temperature": 0},
-        timeout=30,
-    )
-    return r.json()["choices"][0]["message"]["content"]
+    r = None
+    try:
+        r = requests.post(
+            "https://api.deepseek.com/chat/completions",
+            headers={"Authorization": "Bearer " + os.environ.get("DEEPSEEK_API_KEY", "")},
+            json={"model": "deepseek-chat", "messages": msgs, "temperature": 0},
+            proxies={"http": None, "https": None},
+            timeout=30,
+        )
+        data = r.json()
+    except Exception as e:
+        print("   ⚠ 网络请求失败：", type(e).__name__, str(e)[:120])
+        if r is not None:
+            print("   ⚠ 状态码：", r.status_code, "| 响应前 200 字：", repr(r.text[:200]))
+        return None
+
+    if "error" in data:
+        print("   ⚠ 接口返回错误：", data["error"].get("message", data["error"]))
+        return None
+    
+    return data["choices"][0]["message"]["content"]
 
 messages = [
     {"role":"system","content":"""你有两个工具可用：
@@ -64,6 +78,9 @@ for step in range(1, 4):
 
     print("[记录本]", len(messages), "条")
     reply = ask(messages)
+    if reply is None:
+        print("⚠ 本轮调用失败，任务中止。")
+        break
     print("[第", step, "轮] 模型：", reply)
 
     if reply.strip().startswith("{"):
