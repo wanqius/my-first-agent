@@ -104,7 +104,10 @@ for step in range(1, 4):
         if call["tool"] == "get_today":
             result = get_today()
         elif call["tool"] == "count_chars":
-            result = count_chars(call["args"]["text"])
+            if "text" in call["args"]:
+                result = count_chars(call["args"]["text"])
+            else:
+                result = "缺少参数 text"
         elif call["tool"] == "count_words":
             if "text" in call["args"]:
                 result = count_words(call["args"]["text"])
