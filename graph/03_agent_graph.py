@@ -17,6 +17,7 @@ def log(*parts):
         f.write(line + "\n")
 
 def ask(msgs):
+    r = None
     try:
         r = requests.post(
             "https://api.deepseek.com/chat/completions",
@@ -28,6 +29,8 @@ def ask(msgs):
         data = r.json()
     except Exception as e:
         log("[网络]", type(e).__name__, str(e)[:80])
+        if r is not None: 
+            log("[诊断]", r.status_code, repr(r.text[:120]))
         return None
 
     if "error" in data:
@@ -57,7 +60,18 @@ def count_words(text):
 def run_tool(state):
     text = state["messages"][-1]["content"]
     s, e = text.find("{"), text.rfind("}")
-    call = json.loads(text[s:e + 1])
+
+    call = None
+    if s != -1 and e != -1:
+        try:
+            call = json.loads(text[s:e + 1])
+        except Exception as ex:
+            log("[兜底]", "JSON 解析失败：", type(ex).__name__, str(ex)[:60])
+
+    if call is None:
+        log("[兜底]", "没有可用的 JSON，已把错误喂回模型")      # 新增
+        return {"messages": [{"role": "user", "content": "工具调用格式不合法。请只输出一行合法 JSON，不要加任何解释。"}]}
+
     name = call.get("tool")
     args = call.get("args", {})
 
