@@ -2,3 +2,4 @@ mood.txt
 __pycache__/
 *.pyc
 .venv/
+run.log

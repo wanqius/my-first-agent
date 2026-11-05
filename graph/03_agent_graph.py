@@ -10,21 +10,40 @@ from langgraph.graph import StateGraph, START, END
 class State(TypedDict):
     messages: Annotated[list, operator.add]
 
+def log(*parts):
+    line = datetime.datetime.now().strftime("%H:%M:%S") + "  " + " ".join(str(p) for p in parts)
+    print(line)
+    with open("run.log", "a", encoding="utf-8") as f:
+        f.write(line + "\n")
 
-def ask(msgs):                               # 新增：整段从 agent.py 搬来
-    r = requests.post(
-        "https://api.deepseek.com/chat/completions",
-        headers={"Authorization": "Bearer " + os.environ.get("DEEPSEEK_API_KEY", "")},
-        json={"model": "deepseek-chat", "messages": msgs, "temperature": 0},
-        proxies={"http": None, "https": None},
-        timeout=30,
-    )
-    return r.json()["choices"][0]["message"]["content"]
+def ask(msgs):
+    try:
+        r = requests.post(
+            "https://api.deepseek.com/chat/completions",
+            headers={"Authorization": "Bearer " + os.environ.get("DEEPSEEK_API_KEY", "")},
+            json={"model": "deepseek-chat", "messages": msgs, "temperature": 0},
+            proxies={"http": None, "https": None},
+            timeout=30,
+        )
+        data = r.json()
+    except Exception as e:
+        log("[网络]", type(e).__name__, str(e)[:80])
+        return None
+
+    if "error" in data:
+        log("[接口错误]", data["error"].get("message", data["error"]))
+        return None
+
+    return data["choices"][0]["message"]["content"]
+
 
 
 def call_model(state):
     reply = ask(state["messages"])
-    print("  模型说：", reply)
+    if reply is None:                                        # 新增
+        log("[中止]", "本轮调用失败，任务停止")                # 新增
+        return {"messages": [{"role": "assistant", "content": "（模型调用失败，任务中止）"}]}   # 新增
+    log("[模型]", reply[:80])
     return {"messages": [{"role": "assistant", "content": reply}]}
 
 def get_today():
@@ -49,15 +68,24 @@ def run_tool(state):
     else:
         result = "没有这个工具或缺少参数：" + str(name)
 
-    print("  [工具]", name, "→", result)
+    log("[工具]", name, "→", result)
     return {"messages": [{"role": "user", "content": "工具返回：" + str(result) + "，请继续完成任务；如果已经完成，就直接回答。"}]}
 
-
 def route(state):
-    last = state["messages"][-1]
-    if last["role"] == "assistant" and "{" in last["content"]:
-        return "tool"
-    return "end"
+    msgs = state["messages"]
+    last = msgs[-1]
+
+    if not (last["role"] == "assistant" and "{" in last["content"]):
+        return "end"
+
+    for m in reversed(msgs[:-1]):
+        if m["role"] == "assistant":
+            if m["content"].strip() == last["content"].strip():
+                log("[重复]", "检测到相同调用，强制结束")
+                return "end"
+            break
+
+    return "tool"
 
 
 builder = StateGraph(State)
@@ -79,7 +107,7 @@ init = {
 {"tool": "工具名", "args": {"参数名": 值}}
 
 不需要工具时，直接回答。"""},
-        {"role": "user", "content": "今天几号？"},
+        {"role": "user", "content": "昨天是几号"},
     ]
 }
 
