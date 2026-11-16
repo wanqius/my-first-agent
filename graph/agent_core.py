@@ -1,9 +1,11 @@
-"""Agent 核心（可被 04_agent_mcp.py 与评测脚本复用）。
+"""Agent 核心（可被 04_agent_mcp.py、评测脚本、HTTP 服务复用）。
 
-对外只暴露一个函数：
-    result = await run_agent("今天几号？")
-    result["answer"]  # 最终回答
-    result["calls"]   # 依次调用过的工具名，如 ["get_today"]
+两种用法：
+    # 自己开一个 MCP 进程（一次性任务）
+    await run_agent("今天几号？")
+
+    # 复用外部已有会话（服务化：启动时连一次，之后所有请求共用）
+    await run_agent("今天几号？", session=session, tools_text=tools_text)
 """
 
 import datetime
@@ -81,65 +83,48 @@ def route(state):
     return "tool"
 
 
-async def run_agent(question, max_steps=10, verbose=False, server_script=None):
-    """跑一次完整对话，返回 {"answer": str, "calls": [工具名...], "error": bool}"""
-    global VERBOSE
-    VERBOSE = verbose
-
-    if server_script is None:
-        server_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_server.py")
-
+async def _run_with_session(session, tools_text, question, max_steps):
+    """用已建好的 MCP 会话跑一次对话。"""
     calls = []
-    failed = {"flag": False}
 
-    params = StdioServerParameters(command=sys.executable, args=[server_script])
+    async def run_tool(state):
+        text = state["messages"][-1]["content"]
+        s, e = text.find("{"), text.rfind("}")
 
-    async with stdio_client(params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
+        call = None
+        if s != -1 and e != -1:
+            try:
+                call = json.loads(text[s:e + 1])
+            except Exception as ex:
+                log("[兜底]", "JSON 解析失败：", type(ex).__name__)
 
-            tools = await session.list_tools()
-            tools_text = "\n".join(f"- {t.name}: {t.description}" for t in tools.tools)
-            log("[MCP]", "发现工具", len(tools.tools), "个")
+        if call is None:
+            log("[兜底]", "没有可用的 JSON，已把错误喂回模型")
+            return {"messages": [{"role": "user", "content": "工具调用格式不合法。请只输出一行合法 JSON，不要加任何解释。"}]}
 
-            async def run_tool(state):
-                text = state["messages"][-1]["content"]
-                s, e = text.find("{"), text.rfind("}")
+        name = call.get("tool")
+        args = call.get("args") or {}
+        calls.append(name)
 
-                call = None
-                if s != -1 and e != -1:
-                    try:
-                        call = json.loads(text[s:e + 1])
-                    except Exception as ex:
-                        log("[兜底]", "JSON 解析失败：", type(ex).__name__)
+        try:
+            res = await session.call_tool(name, args)
+            out = "".join(getattr(c, "text", "") for c in res.content)
+        except Exception as ex:
+            out = "工具调用失败：" + type(ex).__name__
+            log("[工具错误]", out)
 
-                if call is None:
-                    log("[兜底]", "没有可用的 JSON，已把错误喂回模型")
-                    return {"messages": [{"role": "user", "content": "工具调用格式不合法。请只输出一行合法 JSON，不要加任何解释。"}]}
+        log("[工具]", name, "→", out[:60])
+        return {"messages": [{"role": "user", "content": "工具返回：" + out + "，请继续完成任务；如果已经完成，就直接回答。"}]}
 
-                name = call.get("tool")
-                args = call.get("args") or {}
-                calls.append(name)
+    builder = StateGraph(State)
+    builder.add_node("call_model", call_model)
+    builder.add_node("run_tool", run_tool)
+    builder.add_edge(START, "call_model")
+    builder.add_conditional_edges("call_model", route, {"tool": "run_tool", "end": END})
+    builder.add_edge("run_tool", "call_model")
+    graph = builder.compile()
 
-                try:
-                    res = await session.call_tool(name, args)
-                    out = "".join(getattr(c, "text", "") for c in res.content)
-                except Exception as ex:
-                    out = "工具调用失败：" + type(ex).__name__
-                    log("[工具错误]", out)
-
-                log("[工具]", name, "→", out[:60])
-                return {"messages": [{"role": "user", "content": "工具返回：" + out + "，请继续完成任务；如果已经完成，就直接回答。"}]}
-
-            builder = StateGraph(State)
-            builder.add_node("call_model", call_model)
-            builder.add_node("run_tool", run_tool)
-            builder.add_edge(START, "call_model")
-            builder.add_conditional_edges("call_model", route, {"tool": "run_tool", "end": END})
-            builder.add_edge("run_tool", "call_model")
-            graph = builder.compile()
-
-            system = f"""你可以使用以下工具（由 MCP Server 提供）：
+    system = f"""你可以使用以下工具（由 MCP Server 提供）：
 
 {tools_text}
 
@@ -149,16 +134,38 @@ async def run_agent(question, max_steps=10, verbose=False, server_script=None):
 不需要工具时，直接回答。
 没有对应工具、或你确实做不到时，直接说明，不要编造。"""
 
-            init = {"messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": question},
-            ]}
+    init = {"messages": [
+        {"role": "system", "content": system},
+        {"role": "user", "content": question},
+    ]}
 
-            final = None
-            async for chunk in graph.astream(init, {"recursion_limit": max_steps}, stream_mode="values"):
-                final = chunk
+    final = None
+    async for chunk in graph.astream(init, {"recursion_limit": max_steps}, stream_mode="values"):
+        final = chunk
 
-            if final is None:
-                return {"answer": "", "calls": calls, "error": True}
+    if final is None:
+        return {"answer": "", "calls": calls, "error": True}
 
-            return {"answer": final["messages"][-1]["content"], "calls": calls, "error": False}
+    return {"answer": final["messages"][-1]["content"], "calls": calls, "error": False}
+
+
+async def run_agent(question, max_steps=10, verbose=False, server_script=None, session=None, tools_text=None):
+    """跑一次完整对话，返回 {"answer": str, "calls": [工具名...], "error": bool}"""
+    global VERBOSE
+    VERBOSE = verbose
+
+    if session is not None:
+        return await _run_with_session(session, tools_text or "", question, max_steps)
+
+    if server_script is None:
+        server_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_server.py")
+
+    params = StdioServerParameters(command=sys.executable, args=[server_script])
+
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            tools = await session.list_tools()
+            tt = "\n".join(f"- {t.name}: {t.description}" for t in tools.tools)
+            log("[MCP]", "发现工具", len(tools.tools), "个")
+            return await _run_with_session(session, tt, question, max_steps)
