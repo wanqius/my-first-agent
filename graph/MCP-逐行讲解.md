@@ -1,7 +1,7 @@
 # MCP 三个文件 · 逐行讲解
 
-> 对象：`mcp_server.py`（32 行）、`mcp_client_demo.py`（40 行）、`04_agent_mcp.py`（150 行）
-> 环境：Python 3.12 + `mcp 2.3.0` + `langgraph 1.x`
+> 对象：`mcp_server.py`（32 行）、`mcp_client_demo.py`（40 行）、`04_agent_mcp.py`（150 行）  
+> 环境：Python 3.12 + `mcp 2.3.0` + `langgraph 1.x`  
 > 读法：先看第零节（语法补丁），再按文件顺序读。行号与磁盘上的文件一一对应。
 
 ---
@@ -46,10 +46,12 @@ async def main():
     result = await session.call_tool("get_today", {})
 ```
 
-| 词 | 含义 |
-|---|---|
+
+
+| 词           | 含义                                     |
+| ----------- | -------------------------------------- |
 | `async def` | 这是一个**异步函数**，调用它不会立刻执行完，而是返回一个"待完成"的对象 |
-| `await` | **在这里等**，等的时候把 CPU 让给别人 |
+| `await`     | **在这里等**，等的时候把 CPU 让给别人                |
 
 **为什么需要**：你要等**另一个进程**回话。等待期间程序不能干等着，得让出去。
 
@@ -284,10 +286,10 @@ import sys
 
 **在干什么**：
 
-| 模块 | 用来干什么 |
-|---|---|
-| `asyncio` | 第 40 行 `asyncio.run(main())`，启动异步程序 |
-| `sys` | 第 14 行 `sys.executable`，拿到**当前 python 的完整路径** |
+| 模块        | 用来干什么                                         |
+| --------- | --------------------------------------------- |
+| `asyncio` | 第 40 行 `asyncio.run(main())`，启动异步程序           |
+| `sys`     | 第 14 行 `sys.executable`，拿到**当前 python 的完整路径** |
 
 ---
 
@@ -298,11 +300,11 @@ from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 ```
 
-| 名字 | 是什么 |
-|---|---|
-| `ClientSession` | 会话对象：`list_tools` / `call_tool` 都在它身上 |
-| `StdioServerParameters` | "怎么启动对面那个进程"的配置 |
-| `stdio_client` | 真正去启动进程、建管道 |
+| 名字                      | 是什么                                   |
+| ----------------------- | ------------------------------------- |
+| `ClientSession`         | 会话对象：`list_tools` / `call_tool` 都在它身上 |
+| `StdioServerParameters` | "怎么启动对面那个进程"的配置                       |
+| `stdio_client`          | 真正去启动进程、建管道                           |
 
 ---
 
@@ -321,10 +323,10 @@ SERVER = StdioServerParameters(
 
 **为什么用 `sys.executable` 而不是 `"python"`**：
 
-| 写法 | 风险 |
-|---|---|
-| `"python"` | 可能指向系统里另一个 python（没装 mcp）→ 对面启动即崩 |
-| **`sys.executable`** | **一定是当前这个 venv 的 python**，包齐全 |
+| 写法                   | 风险                                |
+| -------------------- | --------------------------------- |
+| `"python"`           | 可能指向系统里另一个 python（没装 mcp）→ 对面启动即崩 |
+| **`sys.executable`** | **一定是当前这个 venv 的 python**，包齐全     |
 
 > 这是 MCP 最常见的一类故障：**对面进程启动了，但用的是错的解释器**。
 
@@ -350,9 +352,9 @@ async def main():
 
 **在干什么**：**启动对面进程，建两根管子**。
 
-| 变量 | 是什么 |
-|---|---|
-| `read` | 从对面**读**消息的流 |
+| 变量      | 是什么          |
+| ------- | ------------ |
+| `read`  | 从对面**读**消息的流 |
 | `write` | 往对面**写**消息的流 |
 
 **退出这个 `async with` = 进程被关掉。** 所以第 21 行开始的所有代码都在它里面。
@@ -425,10 +427,10 @@ async def main():
 
 **在干什么**：调用工具。
 
-| 参数 | 含义 |
-|---|---|
-| `"get_today"` | 工具名（**字符串**，不是函数） |
-| `{}` | 参数字典（这个工具不要参数，所以空） |
+| 参数            | 含义                 |
+| ------------- | ------------------ |
+| `"get_today"` | 工具名（**字符串**，不是函数）  |
+| `{}`          | 参数字典（这个工具不要参数，所以空） |
 
 **注意**：传的是**名字**。你手里**没有** `get_today` 这个函数——它在对面进程里。
 
@@ -570,6 +572,7 @@ def call_model(state):
     return {"messages": [{"role": "assistant", "content": reply}]}
 ```
 
+
 **在干什么**：节点①。**注意它是普通 `def`，不是 `async def`**——因为调 DeepSeek 用的是同步的 `requests`。
 
 > LangGraph **允许同步节点和异步节点混用**：`astream` 跑的时候，同步节点会被丢到线程池里执行。
@@ -592,6 +595,7 @@ def route(state):
             break
     return "tool"
 ```
+
 
 **在干什么**：三个出口——结束 / 拦截重复 / 去调工具。**原样搬来。**
 
